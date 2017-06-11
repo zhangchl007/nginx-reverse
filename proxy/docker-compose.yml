@@ -1,0 +1,27 @@
+proxy:
+  tty: true
+  labels:
+    name: proxy
+    io.rancher.container.hostname_override: container_name
+  ports:
+  - 80:80
+  - 443:443
+  image: nginx:proxy
+  links:
+  - site1-app:site1-app
+  - site2-app:site2-app
+  stdin_open: true
+site1-app:
+  tty: true
+  labels:
+    name: site1-app
+    io.rancher.container.hostname_override: container_name
+  image: nginx:site1
+  stdin_open: true
+site2-app:
+  tty: true
+  labels:
+    name: site2-app
+    io.rancher.container.hostname_override: container_name
+  image: nginx:site2
+  stdin_open: true
