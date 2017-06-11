@@ -2,7 +2,9 @@
 this is nginx reverse-proxy with multi domain name, url and nginx cache demo for client 
 
 add dns in the /etc/hosts file like those below if no dns domains setup
+
 xxx.xxx.xxx.xxx  app1.minshenglife.com
+
 xxx.xxx.xxx.xxx  app2.minshenglife.com
 
 for site1: app1.minshenglife.com
