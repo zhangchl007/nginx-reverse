@@ -1,0 +1,22 @@
+version: '2'
+
+services:
+  proxy:
+    build: ./proxy
+    networks:
+      - site1
+      - site2
+    name: proxy
+    ports:
+      - 80:80
+      - 443:443
+
+networks:
+  site1:
+    build: ./site1
+    external:
+    name: site1_app
+  site2:
+    build: ./site2
+    external:
+    name: site2_app
