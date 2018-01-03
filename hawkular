@@ -1,2 +1,357 @@
 
-Caused by: org.cassalog.core.ChangeSetAlteredException: The version [1.3] for org.cassalog.core.CqlChangeSet(cql:[ALTER TABLE data ADD s_value text], super:org.cassalog.core.ChangeSet(version:1.3, appliedAt:null, hash:java.nio.HeapByteBuffer[pos=0 lim=20 cap=20], tags:[0.15.x], author:jsanda, description:Add support for string metric type. See HWKMETRICS-384 for details., timestamp:null, alwaysRun:false, verifyFunction:schema-0_15_0$_run_closure4$_closure8@1326d9ed)) does not match the version [2.0] in the change log
+1. 10.30.15.48
+mkdir /mnt/rhel7.4
+
+vi /etc/rc.local
+ mount -o loop /opt/rhel7.4/rhel-server-7.4-x86_64-dvd.iso /mnt/rhel7.4/
+
+cp /etc/httpd/conf.d/yum.conf /etc/httpd/conf.d/rhel.conf
+vi /etc/httpd/conf.d/rhel.conf
+Alias /repo1 "/mnt/rhel7.4"
+<Directory "/mnt/rhel7.4">
+  Options +Indexes +FollowSymLinks
+Require all granted
+</Directory>
+<Location /repo1>
+SetHandler None
+</Location>
+
+copy rhel7.4.repo to all hosts
+
+ ansible all  -i hosts -m copy -a  "src=/root/rhel7.4.repo dest=/etc/yum.repos.d/rhel7.4.repo force=yes"
+
+2. upgrade node01 docker
+
+
+nodeSelector:
+        key1: logging
+
+
+3. isssue , ocp 3.3+ rhel7.4
+runContainer: Error response from daemon: Container command could not be invoked.
+Dec 20 19:30:19 [localhost] atomic-openshift-node: E1220 19:30:19.581039   36725 pod_workers.go:183] Error syncing pod 06e59b5d-e572-11e7-a96f-fa163ee3124d, skipping: failed to "StartContainer" for "POD" with RunContainerError: "runContainer: Error response from daemon: Container command could not be invoked."
+
+solution: upgrade docker 1.10.3 to docker 1.12.6
+
+4. upgrade all nodes from  docker 1.10.3 to docker 1.12.6
+yum update docker -y;
+
+
+5.upgrade masters docker from  docker 1.10.3 to docker 1.12.6 one by one
+ 
+ 5.1 deploy yum repo configuration 
+
+  ansible masters  -i hosts -m copy -a  "src=/root/docker1.12.repo dest=/etc/yum.repos.d/docker1.12.repo force=yes"
+ 5.2 upgrade masters docker from  docker 1.10.3 to docker 1.12.6 one by one
+ 
+	yum update docker -y 
+
+upgrade ocp 3.3 latest
+
+6.etcd backup
+
+ETCD_DATA_DIR=/var/lib/etcd/ 
+etcdctl backup \
+    --data-dir $ETCD_DATA_DIR \
+    --backup-dir $ETCD_DATA_DIR`date +%Y%m%d`
+
+7.upgrade atomic-openshift-utils and openshift-ansible-* 
+
+7.1 deploy ose3.3 latest repo
+
+ansible nodes  -i hosts -m copy -a  "src=/root/3.3.repo dest=/etc/yum.repos.d/3.3.repo force=yes"
+
+7.2 upgrade atomic-openshift-utils and openshift-ansible-*
+
+   ansible nodes  -i hosts -a  "yum update -y atomic-openshift-utils"
+   ansible nodes  -i hosts -a  "yum update -y openshift-ansible-*"
+
+    ansible nodes  -i hosts -a  "yum install atomic-openshift-excluder atomic-openshift-docker-excluder -y"
+
+8. ansible-playbook update on nfs node 
+
+   yum update -y openshift-ansible-*
+
+9. import ocp3.3 latest image
+
+	tag: for i in `docker images |grep v3.3.1 |awk '{print $1":"$2}'`; do docker tag  $i "registry.et-internal.huawei.com:5000$(echo $i|awk -F 'com' '{print $2}')"; done
+	push: for i in `docker images |grep v3.3.1 |grep huawei| awk '{print $1":"$2}'`;do docker push $i ;done
+
+10. update manually yum.conf about excluder docker openshift-atomic
+
+
+ansible-playbook -i /root/huaweiose/hosts  \
+    /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/upgrades/v3_3/upgrade.yml
+11. verify upgrade 
+
+   oc get node
+
+
+oc get -n default dc/docker-registry -o json | grep \"image\"
+   
+
+   oadm diagnostics 
+   
+12. ELK
+	   
+ oc new-app logging-deployer-template -p MODE=upgrade -n logging
+ 
+13. Metric
+ oc new-app --template=metrics-deployer-template -p HAWKULAR_METRICS_HOSTNAME=hawkular-metrics.apps.mtl-expcloud.huawei.com,MODE=refresh -p USE_PERSISTENT_STORAGE=true -p IMAGE_PREFIX=openshift3/ -p IMAGE_VERSION=v3.3 -p CASSANDRA_PV_SIZE=10Gi -p CASSANDRA_NODES=2 -n openshift-infra
+
+
+upgrade ocp 3.4 
+
+https://access.redhat.com/solutions/2916381 issue about etcd
+
+1. Adding ocp 3.4 yum repository to all nodes including masters
+ansible nodes  -i hosts -m copy -a  "src=/root/3.4.repo dest=/etc/yum.repos.d/3.4.repo force=yes"
+
+2. modify the configuration file /etc/yum.conf on all masters/nodes
+ansible nodes  -i hosts -m copy -a  "src=/etc/yum.conf dest=/etc/yum.conf force=yes"
+
+3. upgrade all nodes from  docker 1.10.3 to docker 1.12.6
+
+4.etcd backup
+
+ETCD_DATA_DIR=/var/lib/etcd/ 
+etcdctl backup \
+    --data-dir $ETCD_DATA_DIR \
+    --backup-dir $ETCD_DATA_DIR`date +%Y%m%d`
+
+5.upgrade atomic-openshift-utils and openshift-ansible-* 
+ansible nodes  -i hosts -a  "yum update -y atomic-openshift-utils"
+ansible nodes  -i hosts -a  "yum update -y openshift-ansible-*"  //可能不用执行
+
+these packages add entries to the exclude directive in the host’s /etc/yum.conf file
+
+ansible nodes  -i hosts -a  "yum install atomic-openshift-excluder atomic-openshift-docker-excluder -y"
+
+6.ansible-playbook update on nfs node 
+	cp -r openshift-ansible openshift-ansible.3.3
+	cp /root/3.4.repo /etc/yum.repos.d 
+   yum update -y openshift-ansible-*
+7. import ocp3.4 latest images
+
+tag: 
+for i in `docker images |grep v3.4.1.44.38  |awk '{print $1":"$2}'`; do docker tag $i  "registry.et-internal.huawei.com:5000$(echo $i|awk -F 'com' '{print $2}')";done
+push: for i in `docker images |grep v3.4.1.44.38 |grep huawei| awk '{print $1":"$2}'`;do docker push $i ;done
+
+8. ???
+# mkdir /usr/share/openshift/examples
+# scp -R /usr/share/ansible/openshift-ansible/roles/openshift_examples/files/examples/v3.6/* /usr/share/openshift/examples/
+
+9.upgrade node with the specify label
+
+oc label node node01.et-internal.huawei.com  "upgrade1=yes"
+oc label node node02.et-internal.huawei.com  "upgrade1=yes"
+
+10. upgrade masters
+ansible-playbook -i /root/huaweiose/hosts \
+    /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/upgrades/v3_4/upgrade_control_plane.yml;
+	
+	
+11. migrated all  pod to other nodes
+
+oadm manage-node node01.et-internal.huawei.com --schedulable=false
+oadm manage-node node02.et-internal.huawei.com --schedulable=false
+
+
+oadm drain node01.et-internal.huawei.com --force --delete-local-data --ignore-daemonsets
+oadm drain node02.et-internal.huawei.com --force --delete-local-data --ignore-daemonsets
+
+
+
+13. upgrade nodes
+
+# ansible-playbook -i </path/to/inventory/file> \
+    /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/upgrades/v3_4/upgrade_nodes.yml \
+    -e openshift_upgrade_nodes_label="upgrade1=yes"
+
+
+14. verify upgrade 
+
+   oc get node
+
+
+oc get -n default dc/docker-registry -o json | grep \"image\"
+ 
+oc get -n default dc/router -o json | grep \"image\"
+ 
+
+oadm diagnostics 
+   	
+	
+	
+15.Upgrading the EFK Logging Stack
+
+ oc project logging
+ 
+15.1 Enable the deployer service account to create an OAuthClient
+
+oadm policy add-cluster-role-to-user oauth-editor \
+       system:serviceaccount:logging:logging-deployer -n logging
+	   
+15.2 Ensure that the cluster role rolebinding-reader is assigned to the aggregated-logging-elasticsearch service account 
+
+oadm policy add-cluster-role-to-user rolebinding-reader \
+     system:serviceaccount:logging:aggregated-logging-elasticsearch -n logging
+	 
+15.3 If you are upgrading from OpenShift Container Platform 3.3 to 3.4, add the privileged SCC to the aggregated-logging-fluentd service account:
+
+oadm policy add-scc-to-user privileged \
+    system:serviceaccount:logging:aggregated-logging-fluentd -n logging
+15.4 
+
+ oc new-app logging-deployer-template -p IMAGE_PREFIX="registry.et-internal.huawei.com:5000/openshift3/" -p MODE=upgrade
+ 
+16 Upgrading Cluster Metrics
+oadm policy add-role-to-user view \
+        system:serviceaccount:openshift-infra:hawkular \
+        -n openshift-infra
+
+https://access.redhat.com/support/cases/#/case/02001254	
+	
+//oc new-app --as=system:serviceaccount:openshift-infra:metrics-deployer \
+    -f /usr/share/ansible/openshift-ansible/roles/openshift_hosted_templates/files/v1.4/enterprise/metrics-deployer.yaml \
+	-p HAWKULAR_METRICS_HOSTNAME=hawkular-metrics.apps.mtl-expcloud.huawei.com -p MODE=refresh -p USE_PERSISTENT_STORAGE=true -p IMAGE_PREFIX=openshift3/  -p CASSANDRA_PV_SIZE=10Gi -p CASSANDRA_NODES=2 -n openshift-infra
+
+metric deploy ok
+oc new-app --as=system:serviceaccount:openshift-infra:metrics-deployer \
+    -f /usr/share/ansible/openshift-ansible/roles/openshift_hosted_templates/files/v1.4/enterprise/metrics-deployer.yaml \
+	-p HAWKULAR_METRICS_HOSTNAME=hawkular-metrics.apps.mtl-expcloud.huawei.com -p MODE=redeploy -p USE_PERSISTENT_STORAGE=true -p IMAGE_PREFIX=openshift3/  -p CASSANDRA_PV_SIZE=10Gi -p CASSANDRA_NODES=2 -n openshift-infra
+ 
+   
+   ****OSE3.4 pods limitation configuration:
+
+ /etc/origin/node/node-config.yaml 
+ 
+kubeletArguments: 
+  max-pods:
+  - '110'
+  
+ upgrade ocp 3.5 version
+ 
+ 
+OpenShift Container Platform 3.5 is not certified with older versions of Docker and RHEL 7.1 or earlier.
+
+KUBERNETES HAS BEEN UPDATED TO V1.5.
+
+ETCD HAS BEEN UPDATED TO 3.1.
+
+OPEN VSWITCH (OVS) WAS UPGRADED TO 2.6 and the package is now provided via the Red Hat Enterprise Linux Fast Datapath channel.
+
+inventory list : host file would be updated
+
+ 
+ https://access.redhat.com/articles/2176281
+ 
+ 
+1. Adding ocp 3.5 yum repository to all nodes including masters
+ansible nodes  -i hosts -m copy -a  "src=/root/3.5.repo dest=/etc/yum.repos.d/3.5.repo force=yes"
+
+2. modify the configuration file /etc/yum.conf on all masters/nodes
+ansible nodes  -i hosts -m copy -a  "src=/etc/yum.conf dest=/etc/yum.conf force=yes"
+
+3. upgrade all nodes from  docker 1.10.3 to docker 1.12.6
+
+4.etcd backup
+
+ETCD_DATA_DIR=/var/lib/etcd/ 
+etcdctl backup \
+    --data-dir $ETCD_DATA_DIR \
+    --backup-dir $ETCD_DATA_DIR`date +%Y%m%d`
+5.upgrade atomic-openshift-utils and openshift-ansible-* 
+ansible nodes  -i hosts -a  "yum update -y atomic-openshift-utils"
+ansible nodes  -i hosts -a  "yum update -y openshift-ansible-*"  //可能不用执行
+
+these packages add entries to the exclude directive in the host’s /etc/yum.conf file
+//atomic-openshift-excluder will not be installed due to ocp 3.6 futher upgrade ,but docker-excluder should be installed since docker is 12.6
+
+ansible nodes  -i hosts -a  "yum install atomic-openshift-excluder atomic-openshift-docker-excluder -y"
+
+6.ansible-playbook update on nfs node 
+	cp -r openshift-ansible openshift-ansible.3.4
+	cp /root/3.5.repo /etc/yum.repos.d 
+   yum update -y openshift-ansible-*
+7. import ocp3.5 latest images
+
+for i in `docker images |grep v3.5.5.31.48  |awk '{print $1":"$2}'`; do docker tag $i  "registry.et-internal.huawei.com:5000$(echo $i|awk -F 'com' '{print $2}')";done
+push: for i in `docker images |grepv3.5.5.31.48 |grep huawei| awk '{print $1":"$2}'`;do docker push $i ;done
+
+9.upgrade node with the specify label
+
+oc label node node01.et-internal.huawei.com  "upgrade1=yes"
+oc label node node02.et-internal.huawei.com  "upgrade1=yes"
+
+10. upgrade masters
+ansible-playbook -i /root/huaweiose/hosts \
+     /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/upgrades/v3_5/upgrade_control_plane.yml;	 
+	
+11. migrated all pod to other nodes
+
+oadm manage-node node01.et-internal.huawei.com --schedulable=false
+oadm manage-node node02.et-internal.huawei.com --schedulable=false
+
+
+oadm drain node01.et-internal.huawei.com --force --delete-local-data --ignore-daemonsets
+oadm drain node02.et-internal.huawei.com --force --delete-local-data --ignore-daemonsets
+
+
+
+12. upgrade nodes
+
+# ansible-playbook -i /root/huaweiose/hosts \
+    /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/upgrades/v3_5/upgrade_nodes.yml \
+    -e openshift_upgrade_nodes_label="upgrade1=yes"
+	
+#ansible-playbook -i /root/huaweiose/hosts \
+    /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/upgrades/v3_5/upgrade_nodes.yml \
+    -e openshift_upgrade_nodes_label="upgrade2=yes"	
+	
+	
+13. Verifying the Upgrade 
+
+13.1 oc get node
+
+13.2 oc get -n default dc/docker-registry -o json | grep \"image\"
+ 
+13.3 oc get -n default dc/router -o json | grep \"image\"
+ 
+
+13.4 oadm diagnostics can be executed after logging and metric upgrade
+
+
+14.Upgrading the EFK Logging Stack
+
+14.1 Ansible inventory file to at least set the following required variable within the [OSEv3:vars] section:
+
+[OSEv3:vars]
+
+openshift_hosted_logging_deploy=true 
+openshift_hosted_logging_deployer_prefix=registry.et-internal.huawei.com:5000/openshift3/ 
+openshift_hosted_logging_deployer_version=v3.5
+
+14.2 perform the upgrade by ansible playbook
+
+ansible-playbook -i /root/huaweiose/hosts \
+      /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/openshift-logging.yml;
+	 
+15.Upgrading Cluster Metrics
+
+15.1 Ansible inventory file to at least set the following required variables within the [OSEv3:vars] section:	
+
+	[OSEv3:vars]
+
+openshift_hosted_metrics_deploy=true 
+openshift_hosted_metrics_deployer_prefix=registry.et-internal.huawei.com:5000/openshift3/ 
+openshift_hosted_metrics_deployer_version=v3.5
+openshift_metrics_hawkular_hostname=metrics.apps.mtl-expcloud.huawei.com 
+openshift_metrics_cassandra_storage_type=pv
+
+15.2 perform the upgrade by ansible playbook
+ansible-playbook -i /root/huaweiose/hosts \
+      /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/openshift-metrics.yml ;
+	  
+Verifying the Upgrade 
+Please execute the instruction following 13.4
