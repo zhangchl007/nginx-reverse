@@ -95,11 +95,11 @@ oc get -n default dc/docker-registry -o json | grep \"image\"
    
 12. ELK
 	   
- oc new-app logging-deployer-template --param IMAGE_PREFIX=openshift3/ --param MODE=upgrade -n logging
+ oc new-app logging-deployer-template --param IMAGE_PREFIX=registry.sz-internal.huawei.com:5000/openshift3/ --param MODE=upgrade -n logging
 
  
 13. Metric
- oc new-app --template=metrics-deployer-template -p HAWKULAR_METRICS_HOSTNAME=hawkular-metrics.apps.mtl-expcloud.huawei.com,MODE=refresh -p USE_PERSISTENT_STORAGE=true -p IMAGE_PREFIX=openshift3/ -p IMAGE_VERSION=v3.3 -p CASSANDRA_PV_SIZE=10Gi -p CASSANDRA_NODES=2 -n openshift-infra
+ oc new-app --as=system:serviceaccount:openshift-infra:metrics-deployer --template=metrics-deployer-template -p HAWKULAR_METRICS_HOSTNAME=hawkular-metrics.apps.mtl-expcloud.huawei.com -p MODE=refresh -p USE_PERSISTENT_STORAGE=true -p IMAGE_PREFIX=openshift3/ -p IMAGE_VERSION=v3.3 -p CASSANDRA_PV_SIZE=10Gi -p CASSANDRA_NODES=2 -n openshift-infra
 
 
 upgrade ocp 3.4 
@@ -337,11 +337,15 @@ oadm drain node02.et-internal.huawei.com --force --delete-local-data --ignore-da
 openshift_hosted_logging_deploy=true 
 openshift_hosted_logging_deployer_prefix=registry.et-internal.huawei.com:5000/openshift3/ 
 openshift_hosted_logging_deployer_version=v3.5
+openshift_logging_es_cluster_size=3
+openshift_logging_es_ops_cluster_size=3
+
 
 14.2 perform the upgrade by ansible playbook
 
-ansible-playbook -i /root/huaweiose/hosts \
+ansible-playbook -i /root/huaweiose/hosts-logging \
       /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/openshift-logging.yml;
+	  
 	 
 15.Upgrading Cluster Metrics
 
@@ -352,10 +356,14 @@ ansible-playbook -i /root/huaweiose/hosts \
 openshift_hosted_metrics_deploy=true 
 openshift_hosted_metrics_deployer_prefix=registry.et-internal.huawei.com:5000/openshift3/ 
 openshift_hosted_metrics_deployer_version=v3.5
-openshift_metrics_hawkular_hostname=metrics.apps.mtl-expcloud.huawei.com 
+openshift_metrics_hawkular_hostname=hawkular-metrics.apps.mtl-expcloud.huawei.com 
 openshift_metrics_cassandra_storage_type=pv
 openshift_metrics_cassandra_pvc_size=10Gi
 openshift_metrics_cassandra_replicas=2
+
+
+https://hawkular-metrics.apps.mtl-expcloud.huawei.com/
+
 15.2 perform the upgrade by ansible playbook
 ansible-playbook -i /root/huaweiose/hosts \
       /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/openshift-metrics.yml ;
@@ -364,3 +372,149 @@ Verifying the Upgrade
 Please execute the instruction following 13.4
 
 docker login -u $(oc whoami) -p $(oc whoami -t) <registry_ip>:<port>
+
+
+UPgrading ocp3.6  version
+
+/etc/origin/master/master-config.yaml about etcd3 configuration had been udpated as the following:
+kubernetesMasterConfig:
+  apiServerArguments:
+    storage-backend:
+    - etcd3
+    storage-media-type:
+    - application/vnd.kubernetes.protobuf
+	
+Payment Card Industry Data Security Standard (PCI DSS) Compliance
+Federation Decision Deliberation
+dnsmasq will be reconfigured to route queries for cluster.local and in-addr.arpa to 127.0.0.1:53 rather than to the Kubernetes service IP.
+
+
+os upgrade to rhel7.3 or rhel7.4 
+
+CORE OSE VERSION:v3.6.173.0.83
+
+inventory list : host file would be updated
+
+ 
+0.  we must remove exclude= in the /etc/yum.conf before every openshift version upgrade
+
+1. Adding ocp 3.6 yum repository to all nodes including masters
+ansible nodes  -i hosts -m copy -a  "src=/root/3.6.repo dest=/etc/yum.repos.d/3.6.repo force=yes"
+
+2. modify the configuration file /etc/yum.conf on all masters/nodes
+ansible nodes  -i hosts -m copy -a  "src=/etc/yum.conf dest=/etc/yum.conf force=yes"
+
+3. os upgrade 7.4 (Pay attention to only keep os yum repo)
+
+3.1 upgrading os version for nodes
+   
+3.2 upgrading os version for masters
+
+4.etcd backup
+
+ETCD_DATA_DIR=/var/lib/etcd/ 
+etcdctl backup \
+    --data-dir $ETCD_DATA_DIR \
+    --backup-dir $ETCD_DATA_DIR`date +%Y%m%d`
+	
+5.upgrade atomic-openshift-utils and openshift-ansible-* 
+ansible nodes  -i  /root/huaweiose/hosts -a  "yum update -y atomic-openshift-utils"
+
+//atomic-openshift-excluder will not be installed due to ocp 3.6 futher upgrade ,but docker-excluder should be installed since docker is 12.6
+ansible nodes  -i /root/huaweiose/hosts  -a  "yum install atomic-openshift-excluder atomic-openshift-docker-excluder -y"
+
+6. ansible-playbook update on nfs node 
+    cd  /usr/share/ansible
+	cp -r openshift-ansible openshift-ansible.3.5
+	cp /root/3.6.repo /etc/yum.repos.d 
+   yum update -y openshift-ansible-*
+7. import ocp3.5 latest images
+
+for i in `docker images |grep v3.6   |awk '{print $1":"$2}'`; do docker tag $i  "registry.et-internal.huawei.com:5000$(echo $i|awk -F 'com' '{print $2}')";done
+
+for i in `docker images |grep v3.6 |grep huawei| awk '{print $1":"$2}'`;do docker push $i ;done
+
+8.upgrade node with the specify label
+
+oc label node node01.et-internal.huawei.com  "upgrade1=yes"
+oc label node node02.et-internal.huawei.com  "upgrade1=yes"
+
+9. upgrade masters
+ansible-playbook -i /root/huaweiose/hosts \
+     /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/upgrades/v3_6/upgrade_control_plane.yml --tags pre_upgrade;	 
+ansible-playbook -i /root/huaweiose/hosts \
+     /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/upgrades/v3_6/upgrade_control_plane.yml;	
+
+10. migrated all pod to other nodes
+
+oadm manage-node node01.et-internal.huawei.com --schedulable=false
+oadm manage-node node02.et-internal.huawei.com --schedulable=false
+
+
+oadm drain node01.et-internal.huawei.com --force --delete-local-data --ignore-daemonsets
+oadm drain node02.et-internal.huawei.com --force --delete-local-data --ignore-daemonsets
+
+
+
+11. upgrade nodes
+
+# ansible-playbook -i /root/huaweiose/hosts \
+    /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/upgrades/v3_6/upgrade_nodes.yml \
+    -e openshift_upgrade_nodes_label="upgrade1=yes"
+	
+#ansible-playbook -i /root/huaweiose/hosts \
+    /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/upgrades/v3_6/upgrade_nodes.yml \
+    -e openshift_upgrade_nodes_label="upgrade2=yes"	
+	
+13. Verifying the Upgrade 
+
+13.1 oc get node
+
+13.2 oc get -n default dc/docker-registry -o json | grep \"image\"
+ 
+13.3 oc get -n default dc/router -o json | grep \"image\"
+ 
+
+13.4 oadm diagnostics can be executed after logging and metric upgrade
+
+14.Upgrading the EFK Logging Stack
+
+14.1 Ansible inventory file to at least set the following required variable within the [OSEv3:vars] section:
+
+[OSEv3:vars]
+
+openshift_hosted_logging_deploy=true 
+openshift_hosted_logging_deployer_prefix=registry.et-internal.huawei.com:5000/openshift3/ 
+openshift_hosted_logging_deployer_version=v3.6
+openshift_logging_es_cluster_size=3
+openshift_logging_es_ops_cluster_size=3
+
+
+
+14.2 perform the upgrade by ansible playbook
+
+ansible-playbook -i /root/huaweiose/hosts-logging \
+/usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/openshift-logging.yml;
+
+15.Upgrading Cluster Metrics
+
+15.1 Ansible inventory file to at least set the following required variables within the [OSEv3:vars] section:	
+
+	[OSEv3:vars]
+
+openshift_hosted_metrics_deploy=true 
+openshift_hosted_metrics_deployer_prefix=registry.et-internal.huawei.com:5000/openshift3/ 
+openshift_hosted_metrics_deployer_version=v3.6
+openshift_metrics_hawkular_hostname=hawkular-metrics.apps.mtl-expcloud.huawei.com 
+openshift_metrics_cassandra_storage_type=pv
+openshift_metrics_cassandra_pvc_size=10Gi
+openshift_metrics_cassandra_replicas=2
+
+
+
+https://hawkular-metrics.apps.mtl-expcloud.huawei.com/
+
+15.2 perform the upgrade by ansible playbook
+ansible-playbook -i /root/huaweiose/hosts-logging-metrics \
+      /usr/share/ansible/openshift-ansible/playbooks/byo/openshift-cluster/openshift-metrics.yml  ;
+
